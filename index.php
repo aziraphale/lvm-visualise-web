@@ -4,7 +4,7 @@
 
 require __DIR__ . '/vendor/autoload.php';
 
-//    $cmd = "sudo " . __DIR__ . "/get-lvm-data.sh";
+//    $cmd = "sudo " . __DIR__ . "/bin/get-lvm-data.sh";
 //$lvmData = shell_exec(escapeshellcmd($cmd));
 $pvsData = file_get_contents('example-data-pvs.txt');
 $lvsData = file_get_contents('example-data-lvs.txt');
