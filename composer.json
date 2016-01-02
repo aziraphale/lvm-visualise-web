@@ -1,0 +1,16 @@
+{
+    "name": "aziraphale/lvm",
+    "description": "PHP Webapp to visualise LVM layout/structure",
+    "authors": [
+        {
+            "name": "Andrew Gillard",
+            "email": "andrew@lorddeath.net"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Aziraphale\\LVM\\": "src/"
+        }
+    },
+    "require": {}
+}
