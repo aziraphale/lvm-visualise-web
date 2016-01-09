@@ -4,15 +4,6 @@
 
 require __DIR__ . '/vendor/autoload.php';
 
-//    $cmd = "sudo " . __DIR__ . "/bin/get-lvm-data.sh";
-//$lvmData = shell_exec(escapeshellcmd($cmd));
-$pvsData = file_get_contents('example-data-pvs.txt');
-$lvsData = file_get_contents('example-data-lvs.txt');
-
-
-
-
-
 /*
 PV"       ,"DevSize","PV UUID",                               "VG",  "VG UUID",                               "Attr",  "VSize", "VFree","Ext",  "Fmt", "Attr","PSize", "PFree",  "PE",
 /dev/sda1","221.57g","eh25UN-EQ2P-3TTA-JBed-Hrj0-qwcm-flP65w","pool","zApnUj-bLRF-wmXo-Jpic-ZuBy-s8fD-iLof7b","wz--n-","32.96t","7.19t","4.00m","lvm2","a--","221.57g","160.56g","56721",
