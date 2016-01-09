@@ -1,6 +1,17 @@
 <?php
 namespace Aziraphale\LVM;
 
+use Aziraphale\LVM\Exception\DataLoad\ProcessFailedException;
+use Aziraphale\LVM\Exception\DataLoad\ProcessSetupException;
+use Aziraphale\LVM\Exception\DataLoad\ProcessTimedOutException;
+use Aziraphale\LVM\Exception\DataLoad\UnknownProcessException;
+use InvalidArgumentException;
+use OutOfBoundsException;
+use RuntimeException;
+use Symfony\Component\Process\Exception\ProcessFailedException as Symfony_ProcessFailedException;
+use Symfony\Component\Process\Exception\ProcessTimedOutException as Symfony_ProcessTimedOutException;
+use Symfony\Component\Process\ProcessBuilder;
+
 /**
  * Top-level container class to store references to all the volume groups,
  *  physical volumes, logical volumes and segments that comprise the LVM
@@ -37,6 +48,40 @@ class LVM
      * @var int
      */
     public static $loadDataTimeoutLongSecs = 45;
+
+    /**
+     * Whether we need to use `sudo` in order to run our data-fetching scripts.
+     *
+     * Those scripts run the `pvs` and `lvs` commands (at least) and those
+     *  commands always need to be run as root. The best way to give this script
+     *  root access for those commands is to add a line or two in `/etc/sudoers`
+     *  (via `sudo visudo`) permitting the webserver user account to run the .sh
+     *  scripts in our ./bin directory without supplying a password to `sudo`
+     *  (ideally the .sh scripts would then also be made read-only to the
+     *  webserver user, so that a malicious web script couldn't modify "trusted
+     *  scripts" to do nasty things).
+     * The other options are:
+     *  - permitting the webserver user to use sudo without a password to do
+     *    /anything/, but then you have a giant security hole where any
+     *    malicious or vulnerable script could take over the whole server very
+     *    easily;
+     *  - adding a password to the webserver user account and giving that
+     *    password to this script, but then you risk remote agents connecting
+     *    via SSH to the webserver's user - and then using sudo to take over the
+     *    whole box (which is why this script DOES NOT SUPPORT being given a
+     *    `sudo` password...);
+     *  - or running the webserver as root, which has the same security issues
+     *    as the first alternative option and is thus just as unwise
+     * Seriously, just go with the first option - it's not that difficult!
+     *
+     * This option exists so that the script can continue to function even on a
+     *  system where the webserver runs as root (thus `sudo` isn't required) and
+     *  where `sudo` doesn't even exist, so attempting to run it would fail
+     *  horribly.
+     *
+     * @var bool
+     */
+    public static $loadDataRequiresSudo = true;
 
     /**
      * @var VG[]
@@ -81,7 +126,7 @@ class LVM
      *  the directory in which our composer.json file resides
      *
      * @return string
-     * @throws \RuntimeException
+     * @throws RuntimeException
      */
     public static function pkgRootDir()
     {
@@ -90,7 +135,7 @@ class LVM
             while (!file_exists("$dir/composer.json") && !file_exists("$dir/composer.lock")) {
                 $dir = dirname($dir);
                 if ($dir === '.') {
-                    throw new \RuntimeException("Unable to find a parent directory of the LVM package that contains a composer.json/composer.lock file!");
+                    throw new RuntimeException("Unable to find a parent directory of the LVM package that contains a composer.json/composer.lock file!");
                 }
             }
 
@@ -101,29 +146,66 @@ class LVM
     }
 
     /**
-     * Requests all the required data from the Logical Volume Manager on the local machine, processing that data and storing it as objects in the returned LVM object. If $useTestData is TRUE, the loaded data will come from dummy/example .txt files instead of from running the various LVM commands - this is intended for testing/development purposes, as running the LVM commands can be moderately time-consuming and thus not desirable during a rapid development process. If $loadDataCallback is specified, that function will be called instead in order to retrieve the LVM data (thus permitting for a crude way of loading the data from another computer via SSH, for example). The callback function will be passed one argument: the $useTestData boolean. The callback will be expected to return the exact same data structure as LVM::loadData(), so see that method for details.
+     * Requests all the required data from the Logical Volume Manager on the
+     *  local machine, processing that data and storing it as objects in the
+     *  returned LVM object. If $useTestData is TRUE, the loaded data will come
+     *  from dummy/example .txt files instead of from running the various LVM
+     *  commands - this is intended for testing/development purposes, as running
+     *  the LVM commands can be moderately time-consuming and thus not desirable
+     *  during a rapid development process. If $loadDataCallback is specified,
+     *  that function will be called instead in order to retrieve the LVM data
+     *  (thus permitting for a crude way of loading the data from another
+     *  computer via SSH, for example). The callback function will be passed one
+     *  argument: the $useTestData boolean. The callback will be expected to
+     *  return the exact same data structure as LVM::loadData(), so see that
+     *  method for details.
      *
      * @param bool $useTestData
      * @param callable $loadDataCallback
-     * @throws \RuntimeException
+     * @throws RuntimeException
+     * @throws InvalidArgumentException
+     * @throws ProcessFailedException
+     * @throws ProcessSetupException
+     * @throws ProcessTimedOutException
+     * @throws UnknownProcessException
+     * @throws OutOfBoundsException
      */
     public function __construct($useTestData = false, callable $loadDataCallback = null)
     {
         if (PHP_INT_MAX < 4294967296) {
-            throw new \RuntimeException('This version/build of PHP does not support 64-bit integers and therefore cannot be used to run this software.');
+            throw new RuntimeException(
+                'This version/build of PHP does not support 64-bit integers '.
+                'and therefore cannot be used to run this software.'
+            );
         }
 
         if ($loadDataCallback !== null) {
             if (!is_callable($loadDataCallback)) {
-                throw new \InvalidArgumentException("The \$loadDataCallback argument to this method must either be skipped (by passing NULL) or must be a valid callback function. In this case, neither of these were passed.");
+                throw new InvalidArgumentException(
+                    "The \$loadDataCallback argument to this method must ".
+                    "either be skipped (by passing NULL) or must be a valid ".
+                    "callback function. In this case, neither of these were ".
+                    "passed."
+                );
             }
 
             $lvmData = call_user_func($loadDataCallback, $useTestData);
+
+            if (!isset($lvmData['pvs'], $lvmData['lvs'], $lvmData['time'])) {
+                throw new OutOfBoundsException(
+                    "The \$loadDataCallback method passed to the LVM ".
+                    "constructor did not return the expected data. It must ".
+                    "return the same data in the same structure as does the ".
+                    "LVM::loadData() method."
+                );
+            }
         } else {
             $lvmData = static::loadData($useTestData);
         }
 
-        list($pvsData, $lvsData) = $lvmData;
+        $pvsData = $lvmData['pvs'];
+        $lvsData = $lvmData['lvs'];
+        $timeTaken = $lvmData['time'];
 
         // @todo create stuff!
     }
@@ -138,100 +220,64 @@ class LVM
      *  speed.
      *
      * The return array will have these elements:
-     *  0 => (string) Output of `pvs`
-     *  1 => (string) Output of `lvs`
+     *  'pvs' => (string) Output of `pvs`
+     *  'lvs' => (string) Output of `lvs`
+     *  'time' => (float) Time it took to load the data (seconds; with µs)
      *
      * @param bool $useTestData
-     * @return array(string, string)
-     * @throws \RuntimeException
+     * @return array
+     * @throws RuntimeException
+     * @throws ProcessFailedException
+     * @throws ProcessSetupException
+     * @throws ProcessTimedOutException
+     * @throws UnknownProcessException
      */
     protected static function loadData($useTestData = false)
     {
-        $script = static::pkgRootDir() . '/bin/' . ($useTestData ? 'get-lvm-data_dummy.sh' : 'get-lvm-data.sh');
+        $binDir = static::pkgRootDir() . '/bin';
+        $dev = $useTestData ? '@dev' : '';
 
-        $procDescriptorsSpec = [
-            0 => ['pipe', 'r'], // We READ from the STDIN pipe
-            1 => ['pipe', 'w'], // We WRITE to the STDOUT pipe
-            2 => ['pipe', 'r'], // We READ from the STDERR pipe
-            3 => ['pipe', 'r'], // We READ from the output of the `pvs` command
-            4 => ['pipe', 'r'], // We READ from the output of the `lvs` command
-        ];
-
-        $proc = proc_open($script, $procDescriptorsSpec, $pipes, static::pkgRootDir());
-        $procOpenTime = microtime(true);
-
-        if (!$proc) {
-            throw new \RuntimeException("Failed to execute the script that loads the LVM data! \$php_errormsg contains: `$php_errormsg`");
-        }
-
-        // From here on out, we have an open process handle and so need to explicitly close it (and its pipes) before we leave this method, even if we leave via an exception!
         try {
-            // Make ourselves a few buffers for the data that we're going to load in...
-            $bufStdout = $bufStderr = $bufPvs = $bufLvs = '';
+            $builder = new ProcessBuilder();
 
-            do {
-                // Okay, we should have an opened, valid process! It's probably possible that it exited immediately without returning our data, though, so let's check that that isn't the case!
-                $procStatus = proc_get_status($proc);
-
-                // @todo Include stdout/stderr in these exceptions
-                // @todo Implement our own timeouts: one for total time taken (30s? 45?) and one for time between any amount of response (reset every time we can read any data) (5s? 10s?)
-                if ($procStatus['signaled']) {
-                    // signaled = terminated by an uncaught signal
-                    //   (termsig = number of signal that caused process to terminate)
-                    throw new \RuntimeException("LVM-data-fetching script terminated due to an uncaught signal (SIG={$procStatus['termsig']})");
-                } elseif ($procStatus['stopped']) {
-                    // stopped = process has been stopped by a signal
-                    //   (stopsig = number of signal that caused process to stop)
-                    throw new \RuntimeException("LVM-data-fetching script stopped due to a signal (SIG={$procStatus['stopsig']})");
-                }
-
-                if (!$procStatus['running'] && $procStatus['exitcode'] > 0) {
-                    // Process has stopped without a signal being involved, BUT it exited on a non-zero status, so it didn't complete successfully :(
-                    throw new \RuntimeException("LVM-data-fetching script exited with a non-zero exit status :(");
-                }
-
-                // Process has finished without a signal, AND has exited with a 0 ("success") status code! :D
-                // We do need to make sure we've finished reading everything from our pipes before we move away from here, but in theory, at least, our proc_get_status() call should indicate that the process is 'running' until the process has been able to write everything to its output streams...
-
-                // So we just need to read whatever's available from our pipe streams, but in a nice and efficient manner :)
-                $streamsToRead = [0=>$pipes[0], 2=>$pipes[2], 3=>$pipes[3], 4=>$pipes[4]];
-                $streamsToWrite = null;
-                $streamsToExcept = [0=>$pipes[0], 2=>$pipes[2], 3=>$pipes[3], 4=>$pipes[4]];
-
-                $ssResult = stream_select($streamsToRead, $streamsToWrite, $streamsToExcept, static::$loadDataTimeoutShortSecs, 0);
-                if ($ssResult === false) {
-                    throw new \RuntimeException("LVM-data-fetching script wrapper exited unexpectedly: “{$php_errormsg}”");
-                } elseif ($ssResult === 0) {
-                    throw new \RuntimeException("LVM-data-fetching script took too long to load any data and timed out (the time-between-data-chunks timeout of " . static::$loadDataTimeoutShortSecs . " secs elapsed).");
-                }
-
-
-
-            } while (1);
-        } finally {
-            foreach ($pipes as $pipe) {
-                fclose($pipe);
+            if (static::$loadDataRequiresSudo) {
+                $builder->setPrefix('sudo');
             }
-            proc_close($proc);
+
+            $pvsProcess = $builder
+                ->setArguments(["$binDir/pvs$dev.sh"])
+                ->getProcess()
+                ->setIdleTimeout(static::$loadDataTimeoutShortSecs)
+                ->setTimeout(static::$loadDataTimeoutLongSecs)
+            ;
+            $lvsProcess = $builder
+                ->setArguments(["$binDir/lvs$dev.sh"])
+                ->getProcess()
+                ->setIdleTimeout(static::$loadDataTimeoutShortSecs)
+                ->setTimeout(static::$loadDataTimeoutLongSecs)
+            ;
+        } catch (\Exception $ex) {
+            throw new ProcessSetupException($ex);
         }
 
-        if (is_resource($process)) {
-            // $pipes now looks like this:
-            // 0 => writeable handle connected to child stdin
-            // 1 => readable handle connected to child stdout
-            // Any error output will be appended to /tmp/error-output.txt
+        try {
+            $procStartTime = microtime(true);
 
-            fwrite($pipes[0], '<?php print_r($_ENV); ?>');
-            fclose($pipes[0]);
+            // These will throw a ProcessFailed exception if they exist with non-zero status
+            $pvsProcess->mustRun();
+            $lvsProcess->mustRun();
 
-            echo stream_get_contents($pipes[1]);
-            fclose($pipes[1]);
-
-            // It is important that you close any pipes before calling
-            // proc_close in order to avoid a deadlock
-            $return_value = proc_close($process);
-
-            echo "command returned $return_value\n";
+            return [
+                'pvs' => $pvsProcess->getOutput(),
+                'lvs' => $lvsProcess->getOutput(),
+                'time' => microtime(true) - $procStartTime,
+            ];
+        } catch (Symfony_ProcessFailedException $ex) {
+            throw new ProcessFailedException($ex);
+        } catch (Symfony_ProcessTimedOutException $ex) {
+            throw new ProcessTimedOutException($ex);
+        } catch (\Exception $ex) {
+            throw new UnknownProcessException($ex);
         }
     }
 }

@@ -1,6 +1,9 @@
 <?php
 namespace Aziraphale\LVM\Utility;
 
+use InvalidArgumentException;
+use RuntimeException;
+
 /**
  * Class for converting to/from and displaying file/volume/extent sizes as
  *  given/used by LVM
@@ -155,13 +158,13 @@ class Size
      *
      * @param string $size
      * @return static
-     * @throws \InvalidArgumentException
-     * @throws \RuntimeException
+     * @throws InvalidArgumentException
+     * @throws RuntimeException
      */
     public static function fromLvmHuman($size)
     {
         if (!preg_match('/^\s*([0-9\.]+)([BkKmMgGtTpP])\s*$/S', $size, $matches)) {
-            throw new \InvalidArgumentException(sprintf(
+            throw new InvalidArgumentException(sprintf(
                 'Value passed for $size argument, `%s`, wasn\'t recognised as a valid LVM size string.',
                 $size
             ));
@@ -206,7 +209,7 @@ class Size
                 $bytes = $value;
                 break;
             default:
-                throw new \RuntimeException(
+                throw new RuntimeException(
                     sprintf(
                         "This shouldn't happen! Somehow, our regex matched" .
                         " a file size letter `%s` that wasn't then in the " .
@@ -231,6 +234,8 @@ class Size
      * @param int $extentCount
      * @param string $extentSize
      * @return static
+     * @throws InvalidArgumentException
+     * @throws RuntimeException
      */
     public static function fromExtentCount($extentCount, $extentSize = '4.00m')
     {
@@ -252,7 +257,8 @@ class Size
     }
 
     /**
-     * Returns a new Size object representing the combination of all of the passed size parts...
+     * Returns a new Size object representing the combination of all of the
+     *  passed size parts...
      *
      * @param float $PiB
      * @param float $pb
@@ -266,7 +272,7 @@ class Size
      * @param float $kb
      * @param int $b
      * @return static
-     * @throws \InvalidArgumentException
+     * @throws InvalidArgumentException
      */
     public static function fromParts($PiB = null, $pb = null, $TiB = null, $tb = null, $GiB = null, $gb = null, $MiB = null, $mb = null, $KiB = null, $kb = null, $b = null)
     {
@@ -274,7 +280,7 @@ class Size
         foreach (func_get_args() as $k => $v) {
             $argNum = $k + 1;
             if (!is_numeric($v)) {
-                throw new \InvalidArgumentException(
+                throw new InvalidArgumentException(
                     sprintf(
                         'Argument #%d was not a valid numerical value! A %s of value `%s` was passed!',
                         $argNum,
@@ -284,7 +290,7 @@ class Size
                 );
             }
             if ($v < 0) {
-                throw new \InvalidArgumentException(
+                throw new InvalidArgumentException(
                     sprintf(
                         'Argument #%d has a value less than zero! This is meaningless in this context! Value passed was `%s`.',
                         $argNum,
@@ -380,8 +386,8 @@ class Size
      *
      * @param string $extentSize
      * @return int
-     * @throws \InvalidArgumentException
-     * @throws \RuntimeException
+     * @throws InvalidArgumentException
+     * @throws RuntimeException
      */
     public function extents($extentSize = '4.00m')
     {
